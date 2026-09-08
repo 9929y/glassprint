@@ -1,0 +1,1022 @@
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fuse Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   FUSE BOARD
+   A glass Tetris that develops a picture.
+
+   A picture (a soft gradient by default, or any photo you drop on the
+   board) is cut into the 10 x 20 grid of the well. A piece falls as clear
+   glass and shows nothing. The instant it lands, colour inks into each of
+   its four cells: the exact patch of the picture at that coordinate. It
+   arrives pale and desaturated and develops to full colour over a couple
+   of seconds, the way a print does. Stack, and the picture develops.
+   Clear a row and everything above drops AND re-inks, because every tile
+   now sits over a different patch. The picture reflows and stays whole.
+
+   Before the picture is finished, nothing below the tiles shows it. The
+   room is paper. The ghost is a hairline. All the colour is on landed
+   glass, and only there.
+
+   Block spec is Figma 190:493: radius 10% of the side, contents clipped,
+   translucent white. On a pale ground .2 alpha is invisible, so the shell
+   alpha is raised. The form is the spec, the alpha is not.
+   ═══════════════════════════════════════════════════════════════════ */
+:root{
+  --ink:#333F39;
+  --hair:rgba(70,90,80,.17);
+  --hair-2:rgba(70,90,80,.32);
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:#EFF0EC;
+  color:var(--ink);
+  font-family:var(--mono);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ─── the room is paper. it never takes the picture's colours ───────── */
+.app{
+  position:relative;width:100%;height:100dvh;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  isolation:isolate;
+}
+.ground{
+  position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(72% 58% at 50% 30%, #FCFCF9, transparent 70%),
+    radial-gradient(90% 80% at 50% 110%, #E0E4DD, transparent 72%),
+    #EFF0EC;
+}
+.grain{
+  position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.55;
+  mix-blend-mode:multiply;
+  background-image:radial-gradient(rgba(70,90,80,.10) .5px, transparent .5px);
+  background-size:3px 3px;
+}
+
+/* ─── the well is a tray cut into the paper, not a card floating on it ─ */
+.wrap{position:relative;z-index:2}
+.well{
+  position:relative;border-radius:18px;outline:none;cursor:pointer;
+  background:rgba(228,233,229,.62);
+  box-shadow:
+    inset 0 0 0 1px var(--hair),
+    inset 0 3px 12px rgba(70,90,80,.11),
+    inset 0 -1px 0 rgba(255,255,255,.75),
+    0 1px 0 rgba(255,255,255,.9),
+    0 24px 56px rgba(70,90,80,.10);
+  touch-action:none;overflow:hidden;
+  transition:box-shadow .5s cubic-bezier(.16,1,.3,1), background .5s ease, outline-color .25s ease;
+  outline:2px dashed transparent;outline-offset:-2px;
+}
+/* columns have to be readable on an empty canvas, and there is no colour
+   and no numbering to read them by, so the tray is ruled */
+.well::before{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+  background:repeating-linear-gradient(90deg,
+    rgba(70,90,80,.045) 0 1px, transparent 1px var(--c, 30px));
+}
+/* waiting for its first press: a slow ring, no words */
+.well::after{
+  content:"";position:absolute;inset:0;border-radius:18px;pointer-events:none;z-index:6;
+  box-shadow:inset 0 0 0 2px rgba(70,90,80,.34);
+  opacity:0;transition:opacity .5s ease;
+}
+.well.idle::after{animation:breathe 2.8s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.14}50%{opacity:.58}}
+.well.live{
+  background:rgba(232,237,233,.70);
+  box-shadow:
+    inset 0 0 0 1px var(--hair-2),
+    inset 0 3px 12px rgba(70,90,80,.12),
+    inset 0 -1px 0 rgba(255,255,255,.8),
+    0 1px 0 rgba(255,255,255,.9),
+    0 26px 62px rgba(70,90,80,.13);
+}
+.well.live::after{opacity:0;animation:none}
+/* a photo is being dragged over: the tray asks for it */
+.well.drop{outline-color:rgba(70,90,80,.55);background:rgba(240,244,240,.85)}
+
+.layer{position:absolute;inset:0;pointer-events:none;z-index:1}
+.layer.clip{overflow:hidden;border-radius:18px}
+
+/* ─── a tile is a pane of glass with a patch of the picture inside ──── */
+.tile{
+  position:absolute;top:0;left:0;
+  background:rgba(255,255,255,.44);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.72),
+    inset 0 1px 0 rgba(255,255,255,.92),
+    inset 0 -1px 0 rgba(70,90,80,.14),
+    0 2px 5px rgba(70,90,80,.10);
+  will-change:transform;
+}
+/* the patch. it inks in when the piece lands, cross fades whenever a
+   collapse moves the tile onto a different part of the picture, and
+   develops from pale to full over a couple of seconds after landing.
+   every stagger is a CSS delay, not a timer: a throttled tab must never
+   be able to leave a landed tile colourless. */
+.tile > i{
+  position:absolute;inset:0;border-radius:inherit;   /* Figma: contents clipped */
+  background:var(--c, transparent);
+  clip-path:circle(0% at 50% 50%);
+  filter:saturate(.22) brightness(1.2);
+  transform-origin:50% 100%;
+  transition:clip-path .42s cubic-bezier(.16,1,.3,1) var(--d,0ms),
+             background .52s cubic-bezier(.16,1,.3,1),
+             filter 2.6s ease var(--d,0ms);
+}
+.tile > i.in{clip-path:circle(80% at 50% 50%);filter:none}
+/* the flare that rides in with the colour: a fixed halo whose only
+   animated property is opacity, so it stays on the compositor */
+.tile::before{
+  content:"";position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;
+  box-shadow:0 0 22px 5px rgba(255,255,255,.95), inset 0 0 0 1px #fff;
+  opacity:0;
+}
+.tile.glow::before{animation:flare 560ms cubic-bezier(.16,1,.3,1) var(--d,0ms) both}
+@keyframes flare{0%{opacity:0}18%{opacity:1}100%{opacity:0}}
+/* and the landing squash, on the patch, which the loop does not own */
+.tile.glow > i{animation:squash 460ms cubic-bezier(.16,1,.3,1) var(--d,0ms) both}
+@keyframes squash{0%{transform:scaleY(.84)}46%{transform:scaleY(1.04)}100%{transform:scaleY(1)}}
+/* glass on top of the colour: one sharp specular, one bright top edge,
+   and otherwise nothing, so the picture comes through at full depth */
+.tile::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:1;
+  background:radial-gradient(ellipse 38% 26% at 30% 20%, rgba(255,255,255,.55), transparent 72%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.82), inset 0 -1px 0 rgba(70,90,80,.14);
+}
+.tile.live{
+  background:rgba(255,255,255,.72);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.95),
+    inset 0 1.5px 0 #fff,
+    inset 0 -1.5px 0 rgba(70,90,80,.16),
+    0 7px 18px rgba(70,90,80,.17);
+}
+/* the ghost gives position and nothing else. no colour before landing. */
+.tile.hint{
+  background:transparent;
+  box-shadow:inset 0 0 0 1px rgba(70,90,80,.26);
+}
+.tile.hint::after,.tile.hint::before{display:none}
+.tile.flash{box-shadow:inset 0 0 0 1px #fff, 0 0 24px rgba(255,255,255,.95), 0 2px 6px rgba(70,90,80,.12)}
+
+.piece{position:absolute;top:0;left:0;transform-origin:50% 50%;will-change:transform}
+.shard{position:absolute;top:0;left:0;will-change:transform,opacity}
+.trail{
+  position:absolute;top:0;left:0;pointer-events:none;border-radius:6px;
+  background:linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,.62));
+  will-change:opacity;
+}
+.bloom{
+  position:absolute;inset:0;border-radius:18px;pointer-events:none;z-index:4;
+  background:#fff;opacity:0;
+}
+.sweep{position:absolute;inset:0;border-radius:18px;pointer-events:none;overflow:hidden;z-index:5}
+.sweep::after{
+  content:"";position:absolute;top:-40%;bottom:-40%;width:30%;left:-42%;
+  background:linear-gradient(100deg, transparent, rgba(255,255,255,.9), transparent);
+  transform:skewX(-14deg);opacity:0;
+}
+.sweep.go::after{animation:wipe 640ms cubic-bezier(.4,0,.2,1)}
+.sweep.slow::after{animation:wipe 1200ms cubic-bezier(.4,0,.2,1)}
+@keyframes wipe{
+  0%{left:-42%;opacity:0}
+  14%{opacity:.95}
+  86%{opacity:.95}
+  100%{left:112%;opacity:0}
+}
+/* the finished print, shown over the well while the plate is admired */
+.plate{
+  position:absolute;inset:0;z-index:7;border-radius:18px;pointer-events:auto;
+  width:100%;height:100%;object-fit:cover;opacity:0;
+  transition:opacity .45s ease;
+}
+.plate.up{opacity:1}
+
+/* ─── ironed: the glass comes off and the picture becomes one plate ─── */
+.well.fused .tile{box-shadow:none;transform-origin:50% 50%}
+.well.fused .tile::after{background:linear-gradient(160deg, rgba(255,255,255,.10), transparent 60%);box-shadow:none}
+.well.fused .tile > i{border-radius:2px}
+
+/* ─── wordless chrome ───────────────────────────────────────────────── */
+.dock{
+  position:relative;z-index:2;
+  display:flex;gap:.45rem;align-items:center;justify-content:center;
+  margin-top:clamp(.9rem,2.2vh,1.5rem);
+}
+.gap{width:.5rem}
+.key{
+  min-width:30px;height:30px;padding:0 9px;
+  display:grid;place-items:center;border-radius:8px;
+  font-family:var(--mono);font-size:14px;line-height:1;color:var(--ink);
+  background:rgba(255,255,255,.66);
+  box-shadow:inset 0 0 0 1px var(--hair), 0 1px 2px rgba(70,90,80,.08);
+  transition:color .16s ease, background .16s ease, transform .16s ease;
+}
+.key.hit{color:#F4F6F0;background:#4A5A50;transform:translateY(1px)}
+.icon{
+  width:32px;height:32px;border:0;padding:0;cursor:pointer;border-radius:9px;
+  position:relative;
+  background:rgba(255,255,255,.66);
+  box-shadow:inset 0 0 0 1px var(--hair), 0 1px 2px rgba(70,90,80,.08);
+  transition:background .22s ease, transform .22s cubic-bezier(.16,1,.3,1), opacity .25s ease;
+}
+.icon:hover{background:#fff}
+.icon:active{transform:scale(.94)}
+.icon:focus-visible{outline:2px solid #6E8C74;outline-offset:3px}
+.icon[disabled]{opacity:.32;pointer-events:none}
+.icon::before,.icon::after{content:"";position:absolute;background:var(--ink);border-radius:1px}
+/* the button shows the action you can take: triangle while stopped,
+   two bars while running */
+.icon.pause::before{
+  left:12px;top:8px;width:0;height:0;border-radius:0;background:transparent;
+  border-left:10px solid var(--ink);border-top:8px solid transparent;border-bottom:8px solid transparent;
+}
+.icon.pause::after{display:none}
+.icon.pause.go::before{left:12px;top:9px;width:2.5px;height:14px;border:0;border-radius:1px;background:var(--ink)}
+.icon.pause.go::after{display:block;right:12px;top:9px;width:2.5px;height:14px}
+.icon.redo::before{
+  left:9px;top:9px;width:14px;height:14px;border-radius:50%;background:transparent;
+  box-shadow:inset 0 0 0 2.5px var(--ink);
+  clip-path:polygon(0 0,100% 0,100% 42%,50% 42%,50% 100%,0 100%);
+}
+.icon.redo::after{
+  right:8px;top:8px;width:0;height:0;border-radius:0;background:transparent;
+  border-bottom:5px solid var(--ink);border-left:4px solid transparent;border-right:4px solid transparent;
+}
+/* a photo: a frame and a sun. when one is loaded, a bar crosses it. */
+.icon.photo::before{
+  left:8px;top:9px;width:16px;height:14px;border-radius:3px;background:transparent;
+  box-shadow:inset 0 0 0 2px var(--ink);
+}
+.icon.photo::after{right:10px;top:12px;width:4px;height:4px;border-radius:50%}
+.icon.photo.on{background:#E3E9E3}
+.icon.photo.on::after{
+  right:auto;left:7px;top:15px;width:18px;height:2.5px;border-radius:1px;
+  transform:rotate(-40deg);
+}
+/* save: a chevron dropping into a tray */
+.icon.save::before{
+  left:9px;top:19px;width:14px;height:6px;background:transparent;border-radius:0 0 2px 2px;
+  box-shadow:inset 0 -2px 0 var(--ink), inset 2px 0 0 var(--ink), inset -2px 0 0 var(--ink);
+}
+.icon.save::after{
+  left:12px;top:8px;width:7px;height:7px;background:transparent;border-radius:0;
+  border-right:2.5px solid var(--ink);border-bottom:2.5px solid var(--ink);
+  transform:rotate(45deg);
+}
+.file{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+@media (prefers-reduced-motion: reduce){
+  .well.idle::after{animation:none;opacity:.4}
+  .tile > i{filter:none}
+  *,*::before,*::after{transition-duration:.001ms !important;animation-duration:.001ms !important}
+}
+</style>
+
+<div class="app" id="app">
+  <div class="ground"></div>
+  <div class="grain"></div>
+
+  <div class="wrap">
+    <div class="well idle" id="well" tabindex="0" role="application"
+         aria-label="Tetris. Press an arrow key to begin. Every piece that lands reveals its part of a hidden picture. Drop a photo on the board to make it the picture.">
+      <div class="layer clip" id="stack"></div>
+      <div class="layer clip" id="hintLayer"></div>
+      <div class="layer clip"><div class="piece" id="piece"></div></div>
+      <div class="layer clip" id="debris"></div>
+      <div class="sweep" id="sweep"></div>
+      <div class="bloom" id="bloom"></div>
+    </div>
+  </div>
+
+  <div class="dock">
+    <span class="key" data-k="ArrowLeft">&larr;</span>
+    <span class="key" data-k="ArrowRight">&rarr;</span>
+    <span class="key" data-k="ArrowUp">&uarr;</span>
+    <span class="key" data-k="ArrowDown">&darr;</span>
+    <span class="key" data-k=" ">&#9251;</span>
+    <span class="gap"></span>
+    <button class="icon photo" id="btnPhoto" aria-label="Use a photo as the picture"></button>
+    <button class="icon save" id="btnSave" aria-label="Save the picture" disabled></button>
+    <button class="icon pause" id="btnPause" aria-label="Play or pause"></button>
+    <button class="icon redo" id="btnRedo" aria-label="New picture"></button>
+    <input class="file" id="file" type="file" accept="image/*" tabindex="-1" aria-hidden="true">
+  </div>
+</div>
+
+<script>
+(function(){
+  const COLS = 10, ROWS = 20;
+
+  const $ = id => document.getElementById(id);
+  const app = $('app'), well = $('well');
+  const stackL = $('stack'), hintL = $('hintLayer'), pieceL = $('piece');
+  const debris = $('debris'), bloom = $('bloom'), sweep = $('sweep');
+  const btnPause = $('btnPause'), btnRedo = $('btnRedo');
+  const btnPhoto = $('btnPhoto'), btnSave = $('btnSave'), fileIn = $('file');
+  if(!well) return;
+
+  const SHAPES = {
+    I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+    O:[[1,1],[1,1]],
+    T:[[0,1,0],[1,1,1],[0,0,0]],
+    S:[[0,1,1],[1,1,0],[0,0,0]],
+    Z:[[1,1,0],[0,1,1],[0,0,0]],
+    J:[[1,0,0],[1,1,1],[0,0,0]],
+    L:[[0,0,1],[1,1,1],[0,0,0]]
+  };
+  const KEYS = ['I','O','T','S','Z','J','L'];
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+
+  /* ═══ the picture ═════════════════════════════════════════════════
+     Either a soft ramp from the eight below, or a photo dropped on the
+     board. Both are cut into the 10 x 20 grid the same way: drawn at 6x
+     and averaged down, so a cell gets the true average of its patch.
+     The ramps are linear and monotonic on purpose. The cells have to
+     read in order, dark to light, and compose into one picture.
+     Nothing is jittered per piece. A cell shows the picture, not its own
+     idea. The room never borrows these colours.                      */
+  const FIELDS = [
+    { id:'sage',   angle:202, ramp:[[0,'#39543F'],[.42,'#7FA07F'],[.76,'#C3D2BC'],[1,'#EDF0E4']] },
+    { id:'lagoon', angle:214, ramp:[[0,'#16414F'],[.40,'#3F8A86'],[.74,'#9BCFC0'],[1,'#DFEFE8']] },
+    { id:'glade',  angle:160, ramp:[[0,'#26401F'],[.38,'#5B8244'],[.72,'#A9C97D'],[1,'#E4EFC4']] },
+    { id:'mist',   angle:190, ramp:[[0,'#6F8577'],[.40,'#A2B5A2'],[.74,'#D2DCD0'],[1,'#F3F5EE']] },
+    { id:'tide',   angle:206, ramp:[[0,'#123840'],[.40,'#356F6B'],[.74,'#8FBFB0'],[1,'#D8EBE2']] },
+    { id:'bloom',  angle:176, ramp:[[0,'#9A9354'],[.38,'#CFC178'],[.72,'#E6DDA8'],[1,'#F4F1DE']] },
+    { id:'fern',   angle:212, ramp:[[0,'#284B2E'],[.40,'#67916A'],[.74,'#B4CE9C'],[1,'#E6EFD6']] },
+    { id:'dune',   angle:184, ramp:[[0,'#7C8869'],[.40,'#B4AE86'],[.74,'#DCD3B4'],[1,'#F2F1E6']] }
+  ];
+  const S = 6, FW = COLS * S, FH = ROWS * S;
+  let field = null, recipe = null, photo = null;      /* photo: HTMLImageElement or null */
+
+  function averageDown(g){
+    const px = g.getImageData(0, 0, FW, FH).data, out = [];
+    for(let r = 0; r < ROWS; r++){
+      const row = [];
+      for(let c = 0; c < COLS; c++){
+        let R = 0, G = 0, B = 0;
+        for(let j = 0; j < S; j++) for(let i = 0; i < S; i++){
+          const o = ((r*S + j) * FW + (c*S + i)) * 4;
+          R += px[o]; G += px[o+1]; B += px[o+2];
+        }
+        const n = S * S;
+        row.push('rgb(' + Math.round(R/n) + ',' + Math.round(G/n) + ',' + Math.round(B/n) + ')');
+      }
+      out.push(row);
+    }
+    return out;
+  }
+  function ctx(){
+    const cv = document.createElement('canvas');
+    cv.width = FW; cv.height = FH;
+    return cv.getContext('2d', { willReadFrequently: true });
+  }
+  function sampleRamp(f){
+    const g = ctx();
+    const a = f.angle * Math.PI / 180, cx = FW / 2, cy = FH / 2;
+    const len = Math.abs(FW * Math.sin(a)) + Math.abs(FH * Math.cos(a));
+    const gr = g.createLinearGradient(
+      cx - Math.sin(a) * len / 2, cy + Math.cos(a) * len / 2,
+      cx + Math.sin(a) * len / 2, cy - Math.cos(a) * len / 2);
+    for(const [p, col] of f.ramp) gr.addColorStop(p, col);
+    g.fillStyle = gr; g.fillRect(0, 0, FW, FH);
+    return averageDown(g);
+  }
+  /* a photo is cover-cropped to the well's 1:2 and cut the same way.
+     no tone correction: a dark photo makes a dark picture. */
+  function samplePhoto(img){
+    const g = ctx();
+    const k = Math.max(FW / img.naturalWidth, FH / img.naturalHeight);
+    const w = img.naturalWidth * k, h = img.naturalHeight * k;
+    g.drawImage(img, (FW - w) / 2, (FH - h) / 2, w, h);
+    return averageDown(g);
+  }
+  function newField(){
+    if(photo){ field = samplePhoto(photo); return; }
+    let next = recipe;
+    while(FIELDS.length > 1 && next === recipe) next = FIELDS[Math.floor(Math.random() * FIELDS.length)];
+    recipe = next;
+    field = sampleRamp(recipe);
+  }
+  /* the patch of the picture that lives at this cell. nothing else. */
+  const patch = (c, r) => field[Math.min(ROWS-1, Math.max(0, r))][Math.min(COLS-1, Math.max(0, c))];
+
+  /* ═══ geometry ═══════════════════════════════════════════════════ */
+  let cell = 32, gap = 3, tile = 29;
+  let grid = [], blocks = new Map(), uid = 0;
+  let cur = null, bag = [];
+  let running = false, paused = false, busy = false, raf = 0, lastT = 0;
+  let lockAcc = 0, lockResets = 0, grounded = false, softDrop = false, slamTo = null;
+  let started = false, cleared = 0, movingN = 0;
+
+  function measure(){
+    const vw = innerWidth, vh = innerHeight;
+    const c = Math.min((vh - 112) / ROWS, (vw - 32) / COLS, 44);
+    cell = Math.max(13, Math.floor(c));
+    tile = Math.round(cell * 0.9);
+    gap  = cell - tile;
+    well.style.setProperty('--c', cell + 'px');
+    well.style.width  = COLS * cell + 'px';
+    well.style.height = ROWS * cell + 'px';
+    /* a resize changes the cell, so every position computed from the old
+       cell is wrong, not just every size. resizing tiles without re-laying
+       them out is exactly how four cells end up on top of each other. */
+    for(const b of blocks.values()){
+      sizeTile(b.el);
+      b.ry = b.row * cell + gap / 2; b.vy = 0; b.moving = false;
+      b.el.style.transform = px(b.col, b.row);
+    }
+    movingN = 0;
+    if(cur){ build(); render(); drawHint(); }
+  }
+  function sizeTile(el){
+    el.style.width = tile + 'px';
+    el.style.height = tile + 'px';
+    el.style.borderRadius = Math.max(2, Math.round(tile * 0.1)) + 'px';  /* Figma: 20 on 201 */
+  }
+  function mkTile(cls){
+    const d = document.createElement('div');
+    d.className = 'tile' + (cls ? ' ' + cls : '');
+    if(cls !== 'hint') d.appendChild(document.createElement('i'));
+    sizeTile(d);
+    return d;
+  }
+  const px = (c, r) => 'translate3d(' + (c*cell + gap/2) + 'px,' + (r*cell + gap/2) + 'px,0)';
+
+  /* ═══ bag and collision ══════════════════════════════════════════ */
+  function pull(){
+    if(!bag.length){
+      bag = KEYS.slice();
+      for(let i = bag.length - 1; i > 0; i--){
+        const j = Math.floor(Math.random() * (i + 1));
+        [bag[i], bag[j]] = [bag[j], bag[i]];
+      }
+    }
+    return bag.pop();
+  }
+  function collides(m, x, y){
+    for(let r = 0; r < m.length; r++)
+      for(let c = 0; c < m[r].length; c++){
+        if(!m[r][c]) continue;
+        const cx = x + c, cy = y + r;
+        if(cx < 0 || cx >= COLS || cy >= ROWS) return true;
+        if(cy >= 0 && grid[cy][cx]) return true;
+      }
+    return false;
+  }
+  function landing(m, x, fromY){
+    let y = Math.floor(fromY);
+    while(!collides(m, x, y + 1)) y++;
+    return y;
+  }
+  /* a piece mid-cell straddles two rows, so both have to be legal */
+  const freeAt = (m, x, fy) => !collides(m, x, Math.floor(fy)) && !collides(m, x, Math.ceil(fy));
+  function rot(m){
+    const n = m.length, o = Array.from({length:n}, () => Array(n).fill(0));
+    for(let r = 0; r < n; r++) for(let c = 0; c < n; c++) o[c][n-1-r] = m[r][c];
+    return o;
+  }
+
+  /* ═══ piece lifecycle ════════════════════════════════════════════ */
+  function spawn(){
+    const k = pull();
+    const m = SHAPES[k].map(r => r.slice());
+    const x = Math.floor((COLS - m[0].length) / 2);
+    const y = k === 'I' ? -1 : 0;
+    if(collides(m, x, y)){ finish(); return; }
+    cur = { key: k, m, x, fx: x, vx: 0, fy: y, spin: 0, els: [] };
+    build(); render();
+    grounded = false; lockAcc = 0; lockResets = 0; slamTo = null;
+    drawHint();
+  }
+  function build(){
+    pieceL.textContent = '';
+    cur.els = [];
+    for(let r = 0; r < cur.m.length; r++)
+      for(let c = 0; c < cur.m[r].length; c++){
+        if(!cur.m[r][c]) continue;
+        const el = mkTile('live');
+        el.style.transform = px(c, r);
+        pieceL.appendChild(el);
+        cur.els.push(el);
+      }
+  }
+  const nudge = () => { if(grounded && lockResets < 12){ lockAcc = 0; lockResets++; } };
+
+  function shift(dx){
+    if(!cur || busy) return false;
+    const nx = cur.x + dx;
+    if(!freeAt(cur.m, nx, cur.fy)) return false;
+    cur.x = nx; nudge(); drawHint();
+    return true;
+  }
+  function turn(){
+    if(!cur || busy || cur.key === 'O') return;
+    const m = rot(cur.m);
+    for(const kick of [0,-1,1,-2,2]){
+      const nx = cur.x + kick;
+      if(freeAt(m, nx, cur.fy)){
+        cur.m = m; cur.x = nx; cur.spin = -90;
+        build(); nudge(); drawHint();
+        return;
+      }
+    }
+  }
+  /* hard drop, with a streak of light left where the glass was */
+  function slam(){
+    if(!cur || busy) return;
+    slamTo = landing(cur.m, cur.x, cur.fy);
+    hintL.textContent = '';
+    if(reduce.matches || slamTo - cur.fy < 1.5) return;
+    let minC = 9, maxC = 0;
+    for(const row of cur.m) row.forEach((v, c) => { if(v){ minC = Math.min(minC, c); maxC = Math.max(maxC, c); } });
+    const t = document.createElement('div');
+    t.className = 'trail';
+    const x = (cur.x + minC) * cell + gap / 2, y0 = cur.fy * cell + gap / 2;
+    t.style.cssText = 'width:' + ((maxC - minC + 1) * cell - gap) + 'px;height:' +
+      ((slamTo - cur.fy) * cell) + 'px;transform:translate3d(' + x + 'px,' + y0 + 'px,0)';
+    debris.appendChild(t);
+    t.animate([{opacity:.9},{opacity:0}], {duration:280, easing:'ease-out', fill:'forwards'})
+      .onfinish = () => t.remove();
+    setTimeout(() => t.remove(), 900);
+  }
+  function drawHint(){
+    hintL.textContent = '';
+    if(!cur) return;
+    const gy = landing(cur.m, cur.x, cur.fy);
+    if(gy <= Math.floor(cur.fy) + 1) return;
+    for(let r = 0; r < cur.m.length; r++)
+      for(let c = 0; c < cur.m[r].length; c++){
+        if(!cur.m[r][c]) continue;
+        const y = gy + r;
+        if(y < 0 || y >= ROWS) continue;
+        const el = mkTile('hint');
+        el.style.transform = px(cur.x + c, y);
+        hintL.appendChild(el);
+      }
+  }
+
+  /* the moment the whole thing exists for: the glass lands empty, and
+     the picture inks into it from the middle outward, cell by cell,
+     pale first and developing to full over the next couple of seconds */
+  function ink(b, delay){
+    const i = b.el.firstChild;
+    i.style.setProperty('--c', patch(b.col, b.row));
+    if(reduce.matches){ i.classList.add('in'); return; }
+    b.el.style.setProperty('--d', delay + 'ms');
+    b.el.classList.add('glow');
+    b.el.addEventListener('animationend', () => {
+      b.el.classList.remove('glow');
+      b.el.style.removeProperty('--d');
+    }, { once: true });
+    void i.offsetWidth;                /* so the transition runs from 0% */
+    i.classList.add('in');
+  }
+  /* a collapse slides a tile over a different part of the picture, so it
+     re-inks. already developed, so it cross fades and does not go pale. */
+  const reink = b => b.el.firstChild.style.setProperty('--c', patch(b.col, b.row));
+
+  function lock(){
+    if(!cur) return;
+    const y = Math.round(cur.fy);
+    const fresh = [];
+    for(let r = 0; r < cur.m.length; r++)
+      for(let c = 0; c < cur.m[r].length; c++){
+        if(!cur.m[r][c]) continue;
+        const cx = cur.x + c, cy = y + r;
+        if(cy < 0 || cy >= ROWS) continue;
+        const el = mkTile();
+        el.style.transform = px(cx, cy);
+        stackL.appendChild(el);
+        const id = ++uid;
+        grid[cy][cx] = id;
+        const b = { el, col: cx, row: cy, ry: cy * cell + gap/2, vy: 0, moving: false };
+        blocks.set(id, b);
+        fresh.push(b);
+      }
+    fresh.sort((a, b) => (a.row - b.row) || (a.col - b.col));
+    fresh.forEach((b, i) => ink(b, i * 55));
+    btnSave.disabled = false;
+
+    pieceL.textContent = ''; hintL.textContent = '';
+    cur = null; slamTo = null;
+    const full = [];
+    for(let r = 0; r < ROWS; r++) if(grid[r].every(Boolean)) full.push(r);
+    if(full.length) wipeRows(full);
+    else setTimeout(() => { if(!cur && !busy) spawn(); }, reduce.matches ? 0 : 120);
+  }
+
+  /* ═══ the clear ══════════════════════════════════════════════════
+     A full row costs you that band of the picture, and everything above
+     drops onto a different part of the image and re-inks. So a clear is
+     not a deletion, it is the picture reflowing.                     */
+  function wipeRows(rows){
+    busy = true;
+    cleared += rows.length;
+    const mid = (COLS - 1) / 2;
+    if(!reduce.matches){
+      sweep.classList.remove('go','slow'); void sweep.offsetWidth; sweep.classList.add('go');
+      if(rows.length === 4)
+        bloom.animate([{opacity:0},{opacity:.6,offset:.16},{opacity:0}],
+          {duration:640, easing:'cubic-bezier(.16,1,.3,1)'});
+    }
+    for(const r of rows) for(let c = 0; c < COLS; c++){
+      const b = blocks.get(grid[r][c]);
+      if(!b) continue;
+      if(reduce.matches){ b.el.remove(); continue; }
+      const delay = Math.abs(c - mid) * 24;
+      b.el.classList.add('flash');
+      b.el.animate(
+        [{transform:b.el.style.transform + ' scale(1)', opacity:1},
+         {transform:b.el.style.transform + ' scale(1.15)', opacity:1, offset:.55},
+         {transform:b.el.style.transform + ' scale(1.15)', opacity:0}],
+        {duration:300, delay, easing:'cubic-bezier(.16,1,.3,1)', fill:'forwards'});
+      setTimeout(() => { burst(b); b.el.remove(); }, delay + 170);
+    }
+    const wait = reduce.matches ? 30 : mid * 24 + 220;
+    setTimeout(() => collapse(rows), wait);
+    setTimeout(() => { busy = false; if(!cur) spawn(); }, wait + 90);
+  }
+
+  /* shards carry the colour they were showing, so a clear scatters the
+     picture rather than plain glass */
+  function burst(b){
+    const col = patch(b.col, b.row);
+    const cuts = ['polygon(0 0,100% 0,44% 100%)','polygon(100% 0,100% 100%,44% 100%)','polygon(0 0,44% 100%,0 100%)'];
+    for(let i = 0; i < 3; i++){
+      const d = document.createElement('div');
+      d.className = 'shard';
+      d.style.cssText = 'width:' + tile + 'px;height:' + tile + 'px;background:' + col +
+        ';border-radius:' + Math.max(2, Math.round(tile*0.1)) + 'px;clip-path:' + cuts[i] +
+        ';transform:' + px(b.col, b.row);
+      debris.appendChild(d);
+      const dx = (i - 1) * (14 + Math.random() * 22);
+      const dy = (ROWS - b.row) * cell * 0.5 + 80 + Math.random() * 110;
+      d.animate(
+        [{transform:d.style.transform, opacity:.85},
+         {transform:'translate3d(' + (b.col*cell + gap/2 + dx) + 'px,' + (b.row*cell + gap/2 + dy) +
+                    'px,0) rotate(' + ((Math.random()*140)-70) + 'deg) scale(.55)', opacity:0}],
+        {duration:660 + Math.random()*200, easing:'cubic-bezier(.32,0,.67,0)', fill:'forwards'})
+        .onfinish = () => d.remove();
+      setTimeout(() => d.remove(), 1500);
+    }
+  }
+
+  function collapse(rows){
+    const keep = [];
+    for(let r = ROWS - 1; r >= 0; r--) if(!rows.includes(r)) keep.push(grid[r]);
+    grid = Array.from({length:ROWS}, () => Array(COLS).fill(0));
+    let w = ROWS - 1;
+    for(const row of keep){
+      for(let c = 0; c < COLS; c++){
+        const id = row[c];
+        grid[w][c] = id;
+        if(id){
+          const b = blocks.get(id);
+          if(b && b.row !== w){ b.row = w; if(!b.moving){ b.moving = true; movingN++; } reink(b); }
+        }
+      }
+      w--;
+    }
+    for(const [id, b] of blocks) if(!b.el.isConnected) blocks.delete(id);
+    if(!blocks.size) btnSave.disabled = true;
+  }
+
+  /* ═══ the print ══════════════════════════════════════════════════
+     The picture as it stands, drawn at 60px a cell on paper, with the
+     gaps and the radius kept. Shown over the well while the plate is
+     admired, and saved to a file on request.                          */
+  function snapshot(){
+    const U = 60, T = Math.round(U * 0.9), R = Math.round(T * 0.1), G = (U - T) / 2;
+    const cv = document.createElement('canvas');
+    cv.width = COLS * U; cv.height = ROWS * U;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#EFF0EC'; g.fillRect(0, 0, cv.width, cv.height);
+    for(const b of blocks.values()){
+      g.fillStyle = patch(b.col, b.row);
+      g.beginPath(); g.roundRect(b.col * U + G, b.row * U + G, T, T, R); g.fill();
+    }
+    return cv;
+  }
+  /* Inside the claude.ai viewer, the page cannot download on its own: it
+     hands the file to the viewer through the downloads capability and the
+     viewer decides. Opened as a plain file there is no window.claude, so
+     it falls back to an ordinary download link. Both paths are silent on
+     refusal: the button is the only word this interface has. */
+  const downloadsReady = (window.claude && typeof window.claude.use === 'function')
+    ? window.claude.use('downloads').catch(() => null)
+    : Promise.resolve(null);
+  function savePlate(){
+    if(!blocks.size) return;
+    snapshot().toBlob(async blob => {
+      if(!blob) return;
+      const downloads = await downloadsReady;
+      if(downloads){
+        try{ await downloads.save({ filename: 'fuse-board.png', data: blob }); }
+        catch(err){ /* declined, rate limited, or unavailable: nothing to say */ }
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'fuse-board.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, 'image/png');
+  }
+  let plate = null;
+  function showPlate(){
+    plate = document.createElement('img');
+    plate.className = 'plate'; plate.alt = 'The finished picture';
+    plate.src = snapshot().toDataURL('image/png');
+    well.appendChild(plate);
+    void plate.offsetWidth;
+    plate.classList.add('up');
+  }
+
+  /* ═══ the iron ═══════════════════════════════════════════════════
+     Topping out is the end of the picture, not a failure screen. The
+     glass comes off, the tiles swell into each other, one slow highlight
+     passes over the finished print, and then it is lifted away and a new
+     picture is loaded. No words, no score, nothing to dismiss.       */
+  function finish(){
+    busy = true;
+    const all = [...blocks.values()];
+    if(!all.length || reduce.matches){ setTimeout(renew, 240); return; }
+    well.classList.add('fused');
+    all.forEach(b => {
+      b.el.animate([{transform:b.el.style.transform + ' scale(1)'},
+                    {transform:b.el.style.transform + ' scale(' + (cell / tile) + ')'}],
+                   {duration:620, easing:'cubic-bezier(.16,1,.3,1)', fill:'forwards'});
+    });
+    setTimeout(() => {
+      sweep.classList.remove('go','slow'); void sweep.offsetWidth; sweep.classList.add('slow');
+    }, 420);
+    setTimeout(showPlate, 700);
+    setTimeout(() => {
+      const lift = [{transform:'translateY(0) scale(1)', opacity:1},
+                    {transform:'translateY(-14px) scale(1.02)', opacity:1, offset:.32},
+                    {transform:'translateY(64px) scale(.95)', opacity:0}];
+      const opt = {duration:940, easing:'cubic-bezier(.5,0,.75,0)', fill:'forwards'};
+      if(plate) plate.animate(lift, opt);
+      stackL.animate(lift, opt).onfinish = renew;
+    }, 2800);
+  }
+  function renew(){
+    stackL.getAnimations().forEach(a => a.cancel());
+    well.classList.remove('fused');
+    if(plate){ plate.remove(); plate = null; }
+    blocks.forEach(b => b.el.remove()); blocks.clear();
+    stackL.textContent = ''; debris.textContent = '';
+    grid = Array.from({length:ROWS}, () => Array(COLS).fill(0));
+    cur = null; busy = false; cleared = 0; movingN = 0;
+    btnSave.disabled = true;
+    newField();
+    spawn();
+  }
+
+  /* ═══ loop ═══════════════════════════════════════════════════════ */
+  const fallRate = () => (1.25 + cleared * 0.07) * (softDrop ? 18 : 1);
+
+  /* DAS: hold a direction and the piece walks, on our clock rather than
+     the operating system's key repeat, which differs everywhere and is
+     slow everywhere. 170ms before the walk starts, then a step per 40ms. */
+  const held = { ArrowLeft: false, ArrowRight: false };
+  let dasKey = null, dasHold = 0;
+  const DAS = 0.17, ARR = 0.04;
+
+  function render(){
+    if(!cur) return;
+    pieceL.style.transform =
+      'translate3d(' + (cur.fx * cell) + 'px,' + (cur.fy * cell) + 'px,0)' +
+      (cur.spin ? ' rotate(' + cur.spin.toFixed(2) + 'deg)' : '');
+  }
+
+  function frame(t){
+    if(!running || paused){ raf = 0; return; }
+    if(!lastT) lastT = t;
+    /* clamp both ends: a negative or huge delta detonates the springs,
+       and both are reachable after a tab wake or a clock change */
+    const dt = Math.max(0, Math.min(1/30, (t - lastT) / 1000));
+    lastT = t;
+
+    if(dasKey && held[dasKey]){
+      dasHold += dt;
+      while(dasHold >= DAS){
+        shift(dasKey === 'ArrowLeft' ? -1 : 1);
+        dasHold -= ARR;
+      }
+    }
+
+    if(cur){
+      if(slamTo !== null){
+        cur.fy = Math.min(slamTo, cur.fy + 110 * dt);
+        if(cur.fy >= slamTo - 0.001){ cur.fy = slamTo; lock(); }
+      } else {
+        const floorY = landing(cur.m, cur.x, cur.fy);
+        const next = cur.fy + fallRate() * dt;
+        if(next >= floorY){
+          cur.fy = floorY; grounded = true; lockAcc += dt * 1000;
+          if(lockAcc >= 480) lock();
+        } else { cur.fy = next; grounded = false; lockAcc = 0; }
+      }
+    }
+
+    if(cur){
+      if(reduce.matches){ cur.fx = cur.x; cur.spin = 0; }
+      else {
+        /* near critically damped, so it arrives without wobble */
+        const a = (cur.x - cur.fx) * 640 - cur.vx * 49;
+        cur.vx += a * dt; cur.fx += cur.vx * dt;
+        cur.spin += (0 - cur.spin) * (1 - Math.exp(-dt / 0.06));
+        if(Math.abs(cur.spin) < 0.05) cur.spin = 0;
+      }
+      render();
+    }
+
+    /* settled tiles: a hair under critical, so a collapse lands with
+       weight. only tiles that are actually moving touch the DOM, so in
+       the steady state this loop writes nothing at all. */
+    if(movingN){
+      for(const b of blocks.values()){
+        if(!b.moving) continue;
+        const target = b.row * cell + gap/2;
+        if(reduce.matches){ b.ry = target; }
+        else {
+          const a = (target - b.ry) * 190 - b.vy * 24;
+          b.vy += a * dt; b.ry += b.vy * dt;
+        }
+        if(Math.abs(target - b.ry) < 0.15 && Math.abs(b.vy) < 2){ b.ry = target; b.vy = 0; b.moving = false; movingN--; }
+        b.el.style.transform = 'translate3d(' + (b.col * cell + gap/2) + 'px,' + b.ry + 'px,0)';
+      }
+      if(movingN < 0) movingN = 0;
+    }
+
+    raf = requestAnimationFrame(frame);
+  }
+
+  function play(){
+    if(running && !paused) return;
+    running = true; paused = false; lastT = 0; started = true;
+    well.classList.remove('idle'); well.classList.add('live');
+    btnPause.classList.add('go');
+    if(!cur && !busy) spawn();
+    if(!raf) raf = requestAnimationFrame(frame);
+  }
+  function halt(){
+    paused = true; softDrop = false; dasKey = null; dasHold = 0;
+    btnPause.classList.remove('go');
+    well.classList.remove('live');
+    if(started) well.classList.add('idle');
+    if(raf){ cancelAnimationFrame(raf); raf = 0; }
+  }
+  const toggle = () => (paused || !running) ? play() : halt();
+
+  function restart(){
+    stackL.getAnimations().forEach(a => a.cancel());
+    well.classList.remove('fused');
+    if(plate){ plate.remove(); plate = null; }
+    blocks.forEach(b => b.el.remove()); blocks.clear();
+    stackL.textContent = ''; pieceL.textContent = '';
+    hintL.textContent = ''; debris.textContent = '';
+    grid = Array.from({length:ROWS}, () => Array(COLS).fill(0));
+    cur = null; busy = false; bag = []; cleared = 0; movingN = 0;
+    btnSave.disabled = true;
+    newField(); measure();
+    spawn(); play(); well.focus({ preventScroll: true });
+  }
+
+  /* ═══ the photo ══════════════════════════════════════════════════
+     Drop an image on the board, or paste one, or pick one with the
+     frame button. It becomes the picture at once: the field is resampled
+     and every landed tile re-inks to show its part of it. The frame
+     button, pressed again, takes the photo away and brings back a ramp. */
+  function usePhoto(file){
+    if(!file || !file.type || !file.type.startsWith('image/')) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      photo = img; btnPhoto.classList.add('on');
+      newField();
+      blocks.forEach(reink);
+    };
+    img.onerror = () => URL.revokeObjectURL(url);
+    img.src = url;
+  }
+  function dropPhoto(){
+    photo = null; btnPhoto.classList.remove('on');
+    newField();
+    blocks.forEach(reink);
+  }
+  ['dragenter','dragover'].forEach(ev => app.addEventListener(ev, e => {
+    if(![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault(); well.classList.add('drop');
+  }));
+  ['dragleave','dragend'].forEach(ev => app.addEventListener(ev, () => well.classList.remove('drop')));
+  app.addEventListener('drop', e => {
+    e.preventDefault(); well.classList.remove('drop');
+    usePhoto(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+  document.addEventListener('paste', e => {
+    const item = [...(e.clipboardData ? e.clipboardData.items : [])].find(i => i.type.startsWith('image/'));
+    if(item) usePhoto(item.getAsFile());
+  });
+  fileIn.addEventListener('change', () => { usePhoto(fileIn.files[0]); fileIn.value = ''; });
+  btnPhoto.addEventListener('click', () => photo ? dropPhoto() : fileIn.click());
+  btnSave.addEventListener('click', savePlate);
+
+  /* ═══ input ══════════════════════════════════════════════════════
+     The page runs inside an iframe, so keystrokes do not reach it until
+     something here has focus. Any press anywhere in the room claims focus
+     and starts the game. The dock buttons are told not to take focus on
+     pointerdown, because a button that steals focus pauses the game it
+     was about to act on. */
+  function claim(){ well.focus({ preventScroll: true }); play(); }
+  function echo(k){
+    const el = document.querySelector('.key[data-k="' + k + '"]');
+    if(!el) return;
+    el.classList.add('hit');
+    setTimeout(() => el.classList.remove('hit'), 130);
+  }
+  document.addEventListener('keydown', e => {
+    if(e.key === 'Escape'){ halt(); well.blur(); return; }
+    if(e.key === 'p' && !e.repeat){ toggle(); return; }
+    if(e.key === 'r' && !e.repeat){ restart(); return; }
+    const k = e.key;
+    const known = k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown' || k === ' ' || k === 'x';
+    if(!known) return;
+    e.preventDefault();
+    if(e.repeat) return;                       /* our own DAS handles holding */
+    echo(k);
+    claim();
+    if(k === 'ArrowLeft' || k === 'ArrowRight'){
+      held[k] = true; dasKey = k; dasHold = 0;
+      if(!busy) shift(k === 'ArrowLeft' ? -1 : 1);
+    }
+    else if(k === 'ArrowDown') softDrop = true;
+    else if(!busy && (k === 'ArrowUp' || k === 'x')) turn();
+    else if(!busy && k === ' ') slam();
+  });
+  document.addEventListener('keyup', e => {
+    const k = e.key;
+    if(k === 'ArrowDown') softDrop = false;
+    if(k === 'ArrowLeft' || k === 'ArrowRight'){
+      held[k] = false;
+      if(dasKey === k){
+        const other = k === 'ArrowLeft' ? 'ArrowRight' : 'ArrowLeft';
+        dasKey = held[other] ? other : null;
+        dasHold = 0;
+      }
+    }
+  });
+  window.addEventListener('blur', () => { held.ArrowLeft = held.ArrowRight = false; dasKey = null; softDrop = false; });
+
+  app.addEventListener('pointerdown', e => {
+    e.preventDefault();                          /* nothing in the room takes focus but the well */
+    if(e.target.closest('.icon')) return;
+    claim();
+  });
+  well.addEventListener('blur', e => {
+    if(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.icon')) return;
+    if(running && !paused) halt();
+  });
+  btnPause.addEventListener('click', toggle);
+  btnRedo.addEventListener('click', restart);
+
+  let tx = 0, ty = 0, moved = 0, tstart = 0;
+  well.addEventListener('touchstart', e => {
+    const t = e.touches[0]; tx = t.clientX; ty = t.clientY; moved = 0;
+    tstart = performance.now(); claim();
+  }, { passive: true });
+  well.addEventListener('touchmove', e => {
+    const t = e.touches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+    if(Math.abs(dx) > cell && Math.abs(dx) > Math.abs(dy)){ shift(dx > 0 ? 1 : -1); tx = t.clientX; moved++; }
+    else if(dy > cell * 2.5){ slam(); ty = t.clientY; moved++; }
+  }, { passive: true });
+  well.addEventListener('touchend', () => {
+    if(!moved && performance.now() - tstart < 260) turn();
+  });
+
+  /* ═══ lifecycle ══════════════════════════════════════════════════ */
+  document.addEventListener('visibilitychange', () => { lastT = 0; if(document.hidden) halt(); });
+  window.addEventListener('resize', measure);
+
+  grid = Array.from({length:ROWS}, () => Array(COLS).fill(0));
+  newField();
+  measure();
+  spawn();                       /* the first piece is placed but still */
+})();
+</script>
