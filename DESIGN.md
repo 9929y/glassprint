@@ -1,8 +1,8 @@
-# Fuse Board —— 会显影出一张画的玻璃俄罗斯方块
+# Glassprint —— 会显影出一张画的玻璃俄罗斯方块
 
 v4 · 2026-08-29 · 明色。完整界面，单文件零依赖。
 Artifact：https://claude.ai/code/artifact/ae404b1a-e2f9-4507-bc78-1f759649466e
-文件：`fuse-board.html`
+文件：`index.html`（仓库 `~/Developer/glassprint`，原名 fuse-board.html）
 
 ---
 
@@ -85,6 +85,6 @@ Artifact：https://claude.ai/code/artifact/ae404b1a-e2f9-4507-bc78-1f759649466e
 
 ## 与页脚那版的关系
 
-`footer-under-glass.html` 是**页脚组件**：10×12、自己会玩、无色、无全屏。
-`fuse-board.html` 是**完整游戏界面**：明色、10×20 的井就是画布、可用自己的照片。
+`footer-under-glass.html`（仍在库里 `01_projects/vibecoding/glass-tetris/`）是**页脚组件**：10×12、自己会玩、无色、无全屏。
+`index.html` 是**完整游戏界面**：明色、10×20 的井就是画布、可用自己的照片。
 两者共用 Figma `190:493` 的材质规格（圆角 = 边长 10%、内容裁切、半透白；明色下 alpha 提到 .44/.72）和同一套动效原则（逻辑吸附 / 渲染弹簧 / 连续重力）。

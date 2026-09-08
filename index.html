@@ -1,12 +1,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fuse Board</title>
+<title>Glassprint</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
 
 <style>
 /* ═══════════════════════════════════════════════════════════════════════
-   FUSE BOARD
+   GLASSPRINT
    A glass Tetris that develops a picture.
 
    A picture (a soft gradient by default, or any photo you drop on the
@@ -725,13 +725,13 @@ body{
       if(!blob) return;
       const downloads = await downloadsReady;
       if(downloads){
-        try{ await downloads.save({ filename: 'fuse-board.png', data: blob }); }
+        try{ await downloads.save({ filename: 'glassprint.png', data: blob }); }
         catch(err){ /* declined, rate limited, or unavailable: nothing to say */ }
         return;
       }
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'fuse-board.png';
+      a.download = 'glassprint.png';
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     }, 'image/png');
