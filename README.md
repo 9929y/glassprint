@@ -29,3 +29,7 @@ tray button saves the current picture as a PNG.
 
 `DESIGN.md` is the full record: the mechanic, the material (block spec from Figma
 190:493), the motion rules, the bugs found along the way and the trade-offs taken.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
